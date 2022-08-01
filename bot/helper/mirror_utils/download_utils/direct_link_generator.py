@@ -59,6 +59,8 @@ def direct_link_generator(link: str):
         return anonfiles(link)
     elif 'racaty.net' in link:
         return racaty(link)
+    elif 'we.tl' in link:
+        return wetransfer(link)
     elif '1fichier.com' in link:
         return fichier(link)
     elif 'solidfiles.com' in link:
@@ -358,3 +360,46 @@ def krakenfiles(page_link: str) -> str:
     else:
         raise DirectDownloadLinkException(
             f"Failed to acquire download URL from kraken for : {page_link}")
+
+
+WETRANSFER_API_URL = "https://wetransfer.com/api/v4/transfers"
+WETRANSFER_DOWNLOAD_URL = WETRANSFER_API_URL + "/{transfer_id}/download"
+
+def _prepare_session() -> ression:
+    s = rsession()
+    r = s.get("https://wetransfer.com/")
+    m = re_search('name="csrf-token" content="([^"]+)"', r.text)
+    s.headers.update(
+        {
+            "x-csrf-token": m.group(1),
+            "x-requested-with": "XMLHttpRequest",
+        }
+    )
+    return s
+
+def wetransfer(url: str) -> str:
+    if url.startswith("https://we.tl/"):
+        r = rhead(url, allow_redirects=True)
+        url = r.url
+    recipient_id = None
+    params = urlparse(url).path.split("/")[2:]
+    if len(params) == 2:
+        transfer_id, security_hash = params
+    elif len(params) == 3:
+        transfer_id, recipient_id, security_hash = params
+    else:
+        return None
+    j = {
+        "intent": "entire_transfer",
+        "security_hash": security_hash,
+    }
+    if recipient_id:
+        j["recipient_id"] = recipient_id
+    s = _prepare_session()
+    r = s.post(WETRANSFER_DOWNLOAD_URL.format(transfer_id=transfer_id), json=j)
+    j = r.json()
+    try:
+        if "direct_link" in j:
+            return j["direct_link"]
+    except:
+        raise DirectDownloadLinkException("ERROR: Error while trying to generate Direct Link from WeTransfer!")
