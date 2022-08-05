@@ -10,17 +10,15 @@ for original authorship. """
 
 from requests import get as rget, head as rhead, post as rpost, Session as rsession
 from re import findall as re_findall, sub as re_sub, match as re_match, search as re_search
-from base64 import b64decode
 from urllib.parse import urlparse, unquote
 from json import loads as jsnloads
 from lk21 import Bypass
 from cfscrape import create_scraper
 from bs4 import BeautifulSoup
-from base64 import standard_b64encode
+from base64 import b64decode, standard_b64encode
 
-from bot import LOGGER, UPTOBOX_TOKEN, CRYPT
+from bot import LOGGER, UPTOBOX_TOKEN
 from bot.helper.telegram_helper.bot_commands import BotCommands
-from bot.helper.ext_utils.bot_utils import is_gdtot_link
 from bot.helper.ext_utils.exceptions import DirectDownloadLinkException
 
 fmed_list = ['fembed.net', 'fembed.com', 'femax20.com', 'fcdn.stream', 'feurl.com', 'layarkacaxxi.icu',
@@ -61,14 +59,14 @@ def direct_link_generator(link: str):
         return anonfiles(link)
     elif 'racaty.net' in link:
         return racaty(link)
+    elif 'we.tl' in link:
+        return wetransfer(link)
     elif '1fichier.com' in link:
         return fichier(link)
     elif 'solidfiles.com' in link:
         return solidfiles(link)
     elif 'krakenfiles.com' in link:
         return krakenfiles(link)
-    elif is_gdtot_link(link):
-        return gdtot(link)
     elif any(x in link for x in fmed_list):
         return fembed(link)
     elif any(x in link for x in ['sbembed.com', 'watchsb.com', 'streamsb.net', 'sbplay.org']):
@@ -249,8 +247,8 @@ def racaty(url: str) -> str:
     soup = BeautifulSoup(r.text, "lxml")
     op = soup.find("input", {"name": "op"})["value"]
     ids = soup.find("input", {"name": "id"})["value"]
-    rpost = scraper.post(url, data = {"op": op, "id": ids})
-    rsoup = BeautifulSoup(rpost.text, "lxml")
+    rapost = scraper.post(url, data = {"op": op, "id": ids})
+    rsoup = BeautifulSoup(rapost.text, "lxml")
     dl_url = rsoup.find("a", {"id": "uniqueExpirylink"})["href"].replace(" ", "%20")
     return dl_url
 
@@ -363,22 +361,45 @@ def krakenfiles(page_link: str) -> str:
         raise DirectDownloadLinkException(
             f"Failed to acquire download URL from kraken for : {page_link}")
 
-def gdtot(url: str) -> str:
-    """ Gdtot google drive link generator
-    By https://github.com/xcscxr """
 
-    if CRYPT is None:
-        raise DirectDownloadLinkException("ERROR: CRYPT cookie not provided")
+WETRANSFER_API_URL = "https://wetransfer.com/api/v4/transfers"
+WETRANSFER_DOWNLOAD_URL = WETRANSFER_API_URL + "/{transfer_id}/download"
 
-    match = re_findall(r'https?://(.+)\.gdtot\.(.+)\/\S+\/\S+', url)[0]
+def _prepare_session() -> ression:
+    s = rsession()
+    r = s.get("https://wetransfer.com/")
+    m = re_search('name="csrf-token" content="([^"]+)"', r.text)
+    s.headers.update(
+        {
+            "x-csrf-token": m.group(1),
+            "x-requested-with": "XMLHttpRequest",
+        }
+    )
+    return s
 
-    with rsession() as client:
-        client.cookies.update({'crypt': CRYPT})
-        client.get(url)
-        res = client.get(f"https://{match[0]}.gdtot.{match[1]}/dld?id={url.split('/')[-1]}")
-    matches = re_findall('gd=(.*?)&', res.text)
+def wetransfer(url: str) -> str:
+    if url.startswith("https://we.tl/"):
+        r = rhead(url, allow_redirects=True)
+        url = r.url
+    recipient_id = None
+    params = urlparse(url).path.split("/")[2:]
+    if len(params) == 2:
+        transfer_id, security_hash = params
+    elif len(params) == 3:
+        transfer_id, recipient_id, security_hash = params
+    else:
+        return None
+    j = {
+        "intent": "entire_transfer",
+        "security_hash": security_hash,
+    }
+    if recipient_id:
+        j["recipient_id"] = recipient_id
+    s = _prepare_session()
+    r = s.post(WETRANSFER_DOWNLOAD_URL.format(transfer_id=transfer_id), json=j)
+    j = r.json()
     try:
-        decoded_id = b64decode(str(matches[0])).decode('utf-8')
+        if "direct_link" in j:
+            return j["direct_link"]
     except:
-        raise DirectDownloadLinkException("ERROR: Try in your broswer, mostly file not found or user limit exceeded!")
-    return f'https://drive.google.com/open?id={decoded_id}'
+        raise DirectDownloadLinkException("ERROR: Error while trying to generate Direct Link from WeTransfer!")
